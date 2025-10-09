@@ -1,10 +1,14 @@
 using Scalar.AspNetCore;
+using RulesEngine.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+
+// Add Rules Engine
+builder.Services.AddScoped<RulesEngine.RulesEngine>();
 
 var app = builder.Build();
 
@@ -36,17 +40,79 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
-app.MapPost("/transactions", (TransactionDto transaction) =>
+app.MapPost("/transactions", async (TransactionDto transaction) =>
 {
-    // Process the transaction (in a real app, you'd save to database)
+    // Define business rules
+    var rules = new List<Rule>
+    {
+        new() {
+            RuleName = "MondayValidation",
+            ErrorMessage = "Transactions are not allowed on Mondays - API is closed",
+            Expression = "Date.DayOfWeek != System.DayOfWeek.Monday",
+            RuleExpressionType = RuleExpressionType.LambdaExpression
+        },
+        new() {
+            RuleName = "WeekendDiscount",
+            SuccessEvent = "ApplyWeekendDiscount",
+            Expression = "Date.DayOfWeek == System.DayOfWeek.Saturday || Date.DayOfWeek == System.DayOfWeek.Sunday",
+            RuleExpressionType = RuleExpressionType.LambdaExpression
+        }
+    };
+    
+    var workflow = new Workflow
+    {
+        WorkflowName = "TransactionProcessing",
+        Rules = rules
+    };
+    
+    // Create Rules Engine instance with workflows
+    var rulesEngine = new RulesEngine.RulesEngine([workflow]);
+    
+    // Execute rules
+    var ruleResults = await rulesEngine.ExecuteAllRulesAsync("TransactionProcessing", transaction);
+    
+    // Check if Monday validation failed
+    var mondayRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "MondayValidation");
+    if (mondayRule != null && !mondayRule.IsSuccess)
+    {
+        return Results.BadRequest(new
+        {
+            Error = mondayRule.Rule.ErrorMessage,
+            RuleResults = ruleResults.Select(r => new
+            {
+                r.Rule.RuleName,
+                r.IsSuccess,
+                r.Rule.ErrorMessage
+            })
+        });
+    }
+    
+    // Apply weekend discount if applicable
+    var finalAmount = transaction.Amount;
+    var weekendRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "WeekendDiscount");
+    if (weekendRule != null && weekendRule.IsSuccess)
+    {
+        finalAmount = transaction.Amount * 0.9m; // 10% discount
+    }
+    
+    // Process the transaction
     var result = new
     {
         Id = Guid.NewGuid(),
-        Text = transaction.Text,
-        Amount = transaction.Amount,
-        Date = transaction.Date,
+        transaction.Text,
+        OriginalAmount = transaction.Amount,
+        FinalAmount = finalAmount,
+        DiscountApplied = finalAmount != transaction.Amount,
+        transaction.Date,
         ProcessedAt = DateTime.UtcNow,
-        Status = "Processed"
+        Status = "Processed",
+        RuleResults = ruleResults.Select(r => new
+        {
+            r.Rule.RuleName,
+            r.IsSuccess,
+            Description = r.Rule.RuleName == "MondayValidation" ? "Validates that transactions are not on Mondays" :
+                         r.Rule.RuleName == "WeekendDiscount" ? "Applies 10% discount for weekend transactions" : ""
+        })
     };
     
     return Results.Created($"/transactions/{result.Id}", result);

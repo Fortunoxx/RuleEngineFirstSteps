@@ -1,17 +1,57 @@
-# Test the new transaction endpoints
+# Test the new transaction endpoints with Rules Engine
 
-### Create a new transaction
+### Test weekend discount (Saturday - should get 10% discount)
 POST http://localhost:5207/transactions
 Content-Type: application/json
 
 {
-    "text": "Grocery shopping",
-    "amount": 125.50,
-    "date": "2025-10-09"
+    "text": "Weekend grocery shopping",
+    "amount": 100.00,
+    "date": "2025-10-11"
 }
+
+###
+
+### Test weekend discount (Sunday - should get 10% discount)  
+POST http://localhost:5207/transactions
+Content-Type: application/json
+
+{
+    "text": "Sunday shopping",
+    "amount": 50.00,
+    "date": "2025-10-12"
+}
+
+###
+
+### Test Monday restriction (should fail with 400)
+POST http://localhost:5207/transactions
+Content-Type: application/json
+
+{
+    "text": "Monday transaction",
+    "amount": 75.00,
+    "date": "2025-10-06"
+}
+
+###
+
+### Test regular weekday (no discount, should succeed)
+POST http://localhost:5207/transactions
+Content-Type: application/json
+
+{
+    "text": "Tuesday transaction",
+    "amount": 80.00,
+    "date": "2025-10-08"
+}
+
+###
 
 ### Get a transaction by ID (replace with actual ID from POST response)
 GET http://localhost:5207/transactions/12345678-1234-1234-1234-123456789abc
+
+###
 
 ### Get weather forecast (existing endpoint)
 GET http://localhost:5207/weatherforecast
