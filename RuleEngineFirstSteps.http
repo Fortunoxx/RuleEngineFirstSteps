@@ -1,0 +1,6 @@
+@RuleEngineFirstSteps_HostAddress = http://localhost:5207
+
+GET {{RuleEngineFirstSteps_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
