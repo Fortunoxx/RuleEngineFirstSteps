@@ -1,5 +1,6 @@
 using Scalar.AspNetCore;
 using RulesEngine.Models;
+using RulesEngine.Actions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,7 +29,7 @@ var summaries = new[]
 
 app.MapGet("/weatherforecast", () =>
 {
-    var forecast =  Enumerable.Range(1, 5).Select(index =>
+    var forecast = Enumerable.Range(1, 5).Select(index =>
         new WeatherForecast
         (
             DateOnly.FromDateTime(DateTime.Now.AddDays(index)),
@@ -46,31 +47,57 @@ app.MapPost("/transactions", async (TransactionDto transaction) =>
     var rules = new List<Rule>
     {
         new() {
-            RuleName = "MondayValidation",
             ErrorMessage = "Transactions are not allowed on Mondays - API is closed",
             Expression = "Date.DayOfWeek != System.DayOfWeek.Monday",
-            RuleExpressionType = RuleExpressionType.LambdaExpression
+            RuleExpressionType = RuleExpressionType.LambdaExpression,
+            RuleName = "MondayValidation",
+            SuccessEvent = "10",
         },
         new() {
-            RuleName = "WeekendDiscount",
-            SuccessEvent = "ApplyWeekendDiscount",
             Expression = "Date.DayOfWeek == System.DayOfWeek.Saturday || Date.DayOfWeek == System.DayOfWeek.Sunday",
-            RuleExpressionType = RuleExpressionType.LambdaExpression
+            RuleExpressionType = RuleExpressionType.LambdaExpression,
+            RuleName = "WeekendDiscount",
+            SuccessEvent = "20",
+        },
+        new() {
+            ErrorMessage = "Transaction date must be at least 3 days in the past",
+            Expression = "Date <= DateOnly.FromDateTime(DateTime.Now.AddDays(-3))",
+            RuleExpressionType = RuleExpressionType.LambdaExpression,
+            RuleName = "MinimumAgeValidation",
+            SuccessEvent = "30",
+            Actions = new RuleActions {
+                OnSuccess = new ActionInfo {
+                    Name = "ApplyHistoricalDataBonus",
+                    Context = new Dictionary<string, object> {
+                        { "DiscountPercent", 10 },
+                        { "Reason", "Historical data bonus" }
+                    }
+                }
+            }
+        },
+    };
+
+    // Define custom actions
+    var reSettings = new ReSettings
+    {
+        CustomActions = new Dictionary<string, Func<ActionBase>>
+        {
+            { "ApplyHistoricalDataBonus", () => new HistoricalDataBonusAction() }
         }
     };
-    
+
     var workflow = new Workflow
     {
         WorkflowName = "TransactionProcessing",
         Rules = rules
     };
-    
+
     // Create Rules Engine instance with workflows
-    var rulesEngine = new RulesEngine.RulesEngine([workflow]);
-    
+    var rulesEngine = new RulesEngine.RulesEngine([workflow], reSettings);
+
     // Execute rules
     var ruleResults = await rulesEngine.ExecuteAllRulesAsync("TransactionProcessing", transaction);
-    
+
     // Check if Monday validation failed
     var mondayRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "MondayValidation");
     if (mondayRule != null && !mondayRule.IsSuccess)
@@ -86,7 +113,23 @@ app.MapPost("/transactions", async (TransactionDto transaction) =>
             })
         });
     }
-    
+
+    // Check if minimum age validation failed
+    var ageRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "MinimumAgeValidation");
+    if (ageRule != null && !ageRule.IsSuccess)
+    {
+        return Results.BadRequest(new
+        {
+            Error = ageRule.Rule.ErrorMessage,
+            RuleResults = ruleResults.Select(r => new
+            {
+                r.Rule.RuleName,
+                r.IsSuccess,
+                r.Rule.ErrorMessage
+            })
+        });
+    }
+
     // Apply weekend discount if applicable
     var finalAmount = transaction.Amount;
     var weekendRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "WeekendDiscount");
@@ -94,7 +137,14 @@ app.MapPost("/transactions", async (TransactionDto transaction) =>
     {
         finalAmount = transaction.Amount * 0.9m; // 10% discount
     }
-    
+
+    // Apply historical data bonus if applicable (only fires when date is 3+ days old AND amount > 50)
+    var bonusRule = ruleResults.FirstOrDefault(r => r.Rule.RuleName == "HistoricalDataBonus");
+    if (bonusRule != null && bonusRule.IsSuccess)
+    {
+        finalAmount = finalAmount * 0.95m; // Additional 5% discount for historical high-value transactions
+    }
+
     // Process the transaction
     var result = new
     {
@@ -111,10 +161,12 @@ app.MapPost("/transactions", async (TransactionDto transaction) =>
             r.Rule.RuleName,
             r.IsSuccess,
             Description = r.Rule.RuleName == "MondayValidation" ? "Validates that transactions are not on Mondays" :
-                         r.Rule.RuleName == "WeekendDiscount" ? "Applies 10% discount for weekend transactions" : ""
+                         r.Rule.RuleName == "WeekendDiscount" ? "Applies 10% discount for weekend transactions" :
+                         r.Rule.RuleName == "MinimumAgeValidation" ? "Validates that transaction date is at least 3 days in the past" :
+                         r.Rule.RuleName == "HistoricalDataBonus" ? "Applies 5% bonus discount for historical transactions over $50" : ""
         })
     };
-    
+
     return Results.Created($"/transactions/{result.Id}", result);
 })
 .WithName("CreateTransaction")
@@ -133,7 +185,7 @@ app.MapGet("/transactions/{id:guid}", (Guid id) =>
         ProcessedAt = DateTime.UtcNow,
         Status = "Processed"
     };
-    
+
     return Results.Ok(transaction);
 })
 .WithName("GetTransaction")
@@ -148,3 +200,22 @@ record WeatherForecast(DateOnly Date, int TemperatureC, string? Summary)
 }
 
 record TransactionDto(string Text, decimal Amount, DateOnly Date);
+
+// Custom action class
+public class HistoricalDataBonusAction : ActionBase
+{
+    public override ValueTask<object> Run(ActionContext context, RuleParameter[] ruleParameters)
+    {
+        // Access the context passed from the rule
+        var discountPercent = context.GetContext<int>("DiscountPercent");
+        var reason = context.GetContext<string>("Reason");
+        
+        // Log or perform custom logic
+        Console.WriteLine($"Applying {discountPercent}% discount. Reason: {reason}");
+        
+        // You can also access the transaction data from ruleParameters
+        // and perform calculations or side effects here
+        
+        return new ValueTask<object>(new { Success = true, DiscountPercent = discountPercent });
+    }
+}
