@@ -41,6 +41,64 @@ app.MapGet("/weatherforecast", () =>
 })
 .WithName("GetWeatherForecast");
 
+app.MapGet("/years", async () =>
+{
+ var years = Enumerable.Range(2020, 5);
+
+    var data = new[]
+    {
+        new YearData { Year = 2020, Text = "test1.01" },
+        new YearData { Year = 2020, Text = "test1.02" },
+        new YearData { Year = 2021, Text = "test2.01" },
+        new YearData { Year = 2022, Text = "test3.01" },
+        new YearData { Year = 2022, Text = "test3.02" },
+        new YearData { Year = 2024, Text = "test4.01" },
+        new YearData { Year = 2024, Text = "test4.02" },
+    };
+
+    var maxAllowedPerYear = 2;
+
+    var rules = new List<Rule>
+    {
+        new() {
+            RuleName = "MaxAllowedPerYear",
+            Expression = "Data.Where(x => x.Year == Year).Count() < Convert.ToInt32(maxAllowedPerYear)",
+            RuleExpressionType = RuleExpressionType.LambdaExpression,
+            ErrorMessage = "Maximum allowed data per year reached"
+        }
+    };
+
+    var workflow = new Workflow
+    {
+        WorkflowName = "YearValidation",
+        Rules = rules
+    };
+
+    var rulesEngine = new RulesEngine.RulesEngine([workflow]);
+
+    var validYears = new List<int>();
+    foreach (var year in years)
+    {
+        var inputs = new[]
+        {
+            new RuleParameter("Year", year),
+            new RuleParameter("Data", data),
+            new RuleParameter("maxAllowedPerYear", maxAllowedPerYear)
+        };
+
+        var result = await rulesEngine.ExecuteAllRulesAsync("YearValidation", inputs);
+        if (result.All(r => r.IsSuccess))
+        {
+            validYears.Add(year);
+        }
+    }
+
+    return validYears;
+})
+.WithName("GetYears")
+.WithDescription("Gets a list of years from 2000 to 2024")
+.WithSummary("Get Years");
+
 app.MapPost("/transactions", async (TransactionDto transaction) =>
 {
     // Define business rules
@@ -209,13 +267,19 @@ public class HistoricalDataBonusAction : ActionBase
         // Access the context passed from the rule
         var discountPercent = context.GetContext<int>("DiscountPercent");
         var reason = context.GetContext<string>("Reason");
-        
+
         // Log or perform custom logic
         Console.WriteLine($"Applying {discountPercent}% discount. Reason: {reason}");
-        
+
         // You can also access the transaction data from ruleParameters
         // and perform calculations or side effects here
-        
+
         return new ValueTask<object>(new { Success = true, DiscountPercent = discountPercent });
     }
+}
+
+public record YearData
+{
+    public int Year { get; set; }
+    public string Text { get; set; }
 }
